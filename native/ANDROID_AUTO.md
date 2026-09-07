@@ -107,6 +107,12 @@ while the real player and all app code stay absolute. JS pushes the window map
 via `absSetChapterWindows` (JSON `[{title,startMs,endMs}]`, empty clears);
 next/previous resolve against the synthetic timeline natively, and window seeks
 reach JS as ordinary absolute SEEK events, so JS remains the action authority.
+Each window's metadata (`chapterWindowMetadata`) names the chapter as
+`title`/`displayTitle` and fills the legacy display pair — `subtitle` from the
+artist (JS stamps it as "Book • Author") and `description` from the album title:
+with a display title set, the MediaDescription that Android Auto's now-playing
+lines render skips the artist/album fallback a plain item gets, so a window
+without the pair showed the chapter over an empty second line.
 The same adapter class is copied into the wear and automotive modules and wired
 into their sessions (windows fed by each `SessionManager`; wear's
 `PlayerConnection`/notification provider translate `abschap-<n>` window items

@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingSimpleBasePlayer
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import com.google.common.util.concurrent.Futures
@@ -12,6 +13,48 @@ import android.util.Log
 
 /** One synthetic queue entry: a chapter of the single underlying file. */
 data class ChapterWindow(val title: String, val startMs: Long, val endMs: Long)
+
+/**
+ * The metadata one synthetic window presents: the chapter as its title, every
+ * book-level field carried over from the flat item's [base].
+ *
+ * Both `title` and `displayTitle` name the chapter (media3 controllers read the
+ * former, the legacy MediaSession bridge prefers the latter). A display title
+ * has a side effect the flat item never hits: the legacy MediaDescription that
+ * Android Auto's now-playing lines, the Automotive Media Center and a watch's
+ * remote controls render then takes its second/third lines ONLY from
+ * `subtitle`/`description` — the artist/album fallback that fills them for a
+ * plain item is skipped — so a chaptered book showed its chapter over an EMPTY
+ * second line. The display pair is therefore filled from the same fields that
+ * fallback would have used (the phone stamps artist as "Book • Author";
+ * wear/automotive carry author + album title); an explicit subtitle or
+ * description on the flat item still wins.
+ */
+internal fun chapterWindowMetadata(
+    base: MediaMetadata,
+    title: String,
+    index: Int,
+    count: Int,
+    isCurrent: Boolean,
+): MediaMetadata =
+    base.buildUpon()
+        .setTitle(title)
+        .setDisplayTitle(title)
+        .setSubtitle(base.subtitle ?: base.artist)
+        .setDescription(base.description ?: base.albumTitle)
+        .setTrackNumber(index + 1)
+        .setTotalTrackCount(count)
+        // Inline artwork bytes ride ONLY the CURRENT window. The active item's
+        // LARGE artworkData tier is what out-of-process consumers actually
+        // render — the legacy session's now-playing bitmap is decoded from THIS
+        // item's bytes, and a URI-only metadata left Wear OS remote controls
+        // (and the Auto compact card) coverless for a downloaded single-file
+        // chaptered book. One window's bytes ≈ the pre-adapter active item; the
+        // ~1MB Binder Timeline overflow this strip guards against was N windows
+        // × bytes, so inactive windows stay byte-free (their artworkUri
+        // survives).
+        .apply { if (!isCurrent) setArtworkData(null, null) }
+        .build()
 
 /**
  * Presents a single-file audiobook to the MediaSession as a per-chapter queue
@@ -116,22 +159,7 @@ class ChapterForwardingPlayer(player: Player) : ForwardingSimpleBasePlayer(playe
         val chDur = map[idx].endMs - map[idx].startMs
 
         val windows = map.mapIndexed { i, ch ->
-            val meta = baseMeta.buildUpon()
-                .setTitle(ch.title)
-                .setDisplayTitle(ch.title)
-                .setTrackNumber(i + 1)
-                .setTotalTrackCount(map.size)
-                // Inline artwork bytes ride ONLY the CURRENT window. The active
-                // item's LARGE artworkData tier is what out-of-process consumers
-                // actually render — the legacy session's now-playing bitmap is
-                // decoded from THIS item's bytes, and a URI-only metadata left
-                // Wear OS remote controls (and the Auto compact card) coverless
-                // for a downloaded single-file chaptered book. One window's
-                // bytes ≈ the pre-adapter active item; the ~1MB Binder Timeline
-                // overflow this strip guards against was N windows × bytes, so
-                // inactive windows stay byte-free (their artworkUri survives).
-                .apply { if (i != idx) setArtworkData(null, null) }
-                .build()
+            val meta = chapterWindowMetadata(baseMeta, ch.title, i, map.size, isCurrent = i == idx)
             SimpleBasePlayer.MediaItemData.Builder("abschap-$i")
                 .setMediaItem(
                     realItem.buildUpon().setMediaId("abschap-$i").setMediaMetadata(meta).build()
